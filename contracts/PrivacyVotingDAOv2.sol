@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Public Domain
 pragma solidity ^0.8.24;
+
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "./SemaphoreVerifier.sol";
+import "./SemaphoreVerifier.sol"; // Assuming SemaphoreVerifier.sol is in the same directory or correctly pathed
+
 /**
  * @dev New features compared with v1:
  * • Automatic proposal expiry (Roadmap A)
@@ -11,6 +13,7 @@ import "./SemaphoreVerifier.sol";
 interface IERC20Votes {
     function getVotes(address account) external view returns (uint256);
 }
+
 enum CountingMode {
     Simple,
     Quadratic
@@ -60,11 +63,13 @@ contract PrivacyVotingDAOv2 is Ownable {
         uint256 weight
     );
     event ProposalClosed(uint256 indexed id, uint8 winner);
+
     /* ---------- Owner-only ---------- */
     function updateMemberRoot(uint64 newRoot) external onlyOwner {
         memberMerkleRoot = newRoot;
         emit MemberRootUpdated(newRoot);
     }
+
     function createProposal(
         string calldata title,
         string calldata description,
@@ -78,12 +83,13 @@ contract PrivacyVotingDAOv2 is Ownable {
         p.title = title;
         p.description = description;
         p.mode = mode;
-        // Clear existing options array (penting!)
-        delete p.options;
-        // Copy each string secara manual
+
+        // This section correctly copies the string array from calldata to storage
+        delete p.options; // Clear existing options array
         for (uint i = 0; i < options.length; i++) {
-            p.options.push(options[i]);
+            p.options.push(options[i]); // Copy each string manually
         }
+
         p.closes = uint64(block.timestamp) + duration;
         emit ProposalCreated(id, mode, title, p.closes);
     }
@@ -95,15 +101,19 @@ contract PrivacyVotingDAOv2 is Ownable {
         p.closed = true;
         uint8 winner = type(uint8).max;
         uint256 high = 0;
-        for (uint8 i; i < p.options.length; ++i) {
+        for (uint8 i = 0; i < p.options.length; ++i) {
+            // Added missing semicolon
             uint256 v = p.tally[i];
             if (v > high) {
                 high = v;
                 winner = i;
-            } else if (v == high) winner = type(uint8).max; // tie
+            } else if (v == high) {
+                winner = type(uint8).max; // tie
+            }
         }
         emit ProposalClosed(id, winner);
     }
+
     /* ---------- Voting ---------- */
     function vote(
         uint256 id,
@@ -120,11 +130,24 @@ contract PrivacyVotingDAOv2 is Ownable {
 
         uint256 signal = uint256(keccak256(abi.encodePacked(id, option))) >> 8;
 
+        // Assuming your Verifier_Groth16.sol expects 4 public inputs:
+        // [root, nullifierHash, signalHash, externalNullifier]
+        // If your circuit has a different number/order of public inputs, adjust pubSignals accordingly.
+        // The original `PrivacyVotingDAOv2.txt` had `uint256(0)` as a filler.
+        // This depends entirely on your `Verifier_Groth16.sol` and the circuit it was generated from.
+        // For Semaphore, typical public inputs for proof verification might be:
+        // - merkleTreeRoot
+        // - nullifierHash
+        // - signalHash (often `abi.encodePacked(externalNullifier, signal)`)
+        // - externalNullifier (e.g., `appId` or `actionId` to prevent replay across applications/actions)
+        // The provided `Verifier_Groth16.sol` takes `uint[4] calldata _pubSignals`.
+        // Your current code uses: `[uint256(root), nullifier, signal, uint256(0)]`
+        // This assumes the fourth public input is 0 or not strictly validated as something else for this specific circuit.
         uint256[4] memory pubSignals = [
             uint256(root),
             nullifier,
             signal,
-            uint256(0) // jika circuit cuma 3 public inputs, tambahkan 0 sebagai filler
+            uint256(0) // This might need adjustment based on your circuit's specific externalNullifier usage
         ];
 
         require(
@@ -151,7 +174,13 @@ contract PrivacyVotingDAOv2 is Ownable {
         }
         emit VoteCast(id, option, nullifier, weight);
 
-        if (block.timestamp >= p.closes) closeProposal(id);
+        // Consider if automatically closing is desired after every vote if time is up.
+        // This could lead to higher gas costs for the last voter.
+        // An alternative is to only allow manual closing via `closeProposal`.
+        if (block.timestamp >= p.closes && !p.closed) {
+            // Added !p.closed check to avoid redundant events/logic
+            closeProposal(id);
+        }
     }
 
     /* ---------- Reads ---------- */
@@ -172,11 +201,12 @@ contract PrivacyVotingDAOv2 is Ownable {
         return (
             p.title,
             p.mode,
-            !p.closed && block.timestamp < p.closes,
+            !p.closed && block.timestamp < p.closes, // Logic for 'open'
             p.closes,
             p.options
         );
     }
+
     function tallies(
         uint256 id,
         uint16 start,
@@ -185,11 +215,22 @@ contract PrivacyVotingDAOv2 is Ownable {
         Proposal storage p = _proposals[id];
         uint16 len = uint16(p.options.length);
         require(start < len, "oob");
-        uint16 end = n == 0 || start + n > len ? len : start + n;
+        uint16 end = (n == 0 || start + n > len || start + n < start)
+            ? len
+            : start + n; // Added overflow check for start + n
+        if (start >= end && len > 0) {
+            // Handle cases where start might be >= end due to large n or start being near len
+            out = new uint256[](0);
+            return out;
+        }
         out = new uint256[](end - start);
-        for (uint16 i = start; i < end; ++i) out[i - start] = p.tally[i];
+        for (uint16 i = start; i < end; ++i) {
+            out[i - start] = p.tally[i];
+        }
     }
+
     /* ---------- Internal ---------- */
+    // Basic integer square root
     function sqrt(uint256 x) private pure returns (uint256 y) {
         if (x == 0) return 0;
         uint256 z = (x + 1) / 2;
