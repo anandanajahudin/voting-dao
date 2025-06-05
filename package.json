@@ -10,6 +10,9 @@
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.3.0",
+    "@semaphore-protocol/group": "^4.11.1",
+    "@semaphore-protocol/identity": "^4.11.1",
+    "@semaphore-protocol/proof": "^4.11.1",
     "circomlib": "^2.0.5"
   },
   "scripts": {
