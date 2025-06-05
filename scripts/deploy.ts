@@ -3,15 +3,17 @@ import { AddressZero } from "@ethersproject/constants";
 
 async function main() {
     const [deployer] = await hardhatEthers.getSigners();
+    console.log("Deploying contracts with:", deployer.address);
 
     const Verifier = await hardhatEthers.getContractFactory("SemaphoreVerifier");
     const verifier = await Verifier.deploy();
     await verifier.deployed();
+    console.log("Verifier deployed at:", verifier.address);
 
-    const DAO = await hardhatEthers.getContractFactory("PrivacyVotingDAO");
-    const dao = await DAO.deploy(verifier.address, 0n, AddressZero);
+    const merkleRoot = 1234567890n; // Ganti ini jika sudah punya root hasil dari frontend
+    const DAO = await hardhatEthers.getContractFactory("PrivacyVotingDAOv2");
+    const dao = await DAO.deploy(verifier.address, merkleRoot, AddressZero); // AddressZero kalau tidak pakai quadratic token
     await dao.deployed();
-
     console.log("DAO deployed at:", dao.address);
 }
 

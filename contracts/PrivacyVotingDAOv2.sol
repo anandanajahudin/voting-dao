@@ -17,6 +17,17 @@ enum CountingMode {
 }
 
 contract PrivacyVotingDAOv2 is Ownable {
+    /* ---------- Constructor ---------- */
+    constructor(
+        SemaphoreVerifier _verifier,
+        uint64 _root,
+        IERC20Votes _govToken
+    ) Ownable(msg.sender) {
+        verifier = _verifier;
+        memberMerkleRoot = _root;
+        govToken = _govToken;
+    }
+
     /* ---------- Data Types ---------- */
     struct Proposal {
         string title;
@@ -49,16 +60,6 @@ contract PrivacyVotingDAOv2 is Ownable {
         uint256 weight
     );
     event ProposalClosed(uint256 indexed id, uint8 winner);
-    /* ---------- Constructor ---------- */
-    constructor(
-        SemaphoreVerifier _verifier,
-        uint64 _root,
-        IERC20Votes _govToken
-    ) {
-        verifier = _verifier;
-        memberMerkleRoot = _root;
-        govToken = _govToken; // can be address(0) if quadratic not needed
-    }
     /* ---------- Owner-only ---------- */
     function updateMemberRoot(uint64 newRoot) external onlyOwner {
         memberMerkleRoot = newRoot;
@@ -77,10 +78,16 @@ contract PrivacyVotingDAOv2 is Ownable {
         p.title = title;
         p.description = description;
         p.mode = mode;
-        p.options = options;
+        // Clear existing options array (penting!)
+        delete p.options;
+        // Copy each string secara manual
+        for (uint i = 0; i < options.length; i++) {
+            p.options.push(options[i]);
+        }
         p.closes = uint64(block.timestamp) + duration;
         emit ProposalCreated(id, mode, title, p.closes);
     }
+
     function closeProposal(uint256 id) public {
         Proposal storage p = _proposals[id];
         require(!p.closed, "already closed");
@@ -110,11 +117,26 @@ contract PrivacyVotingDAOv2 is Ownable {
         require(option < p.options.length, "bad opt");
         require(!p.nullifiers[nullifier], "dupe");
         require(root == memberMerkleRoot, "root");
+
         uint256 signal = uint256(keccak256(abi.encodePacked(id, option))) >> 8;
+
+        uint256[4] memory pubSignals = [
+            uint256(root),
+            nullifier,
+            signal,
+            uint256(0) // jika circuit cuma 3 public inputs, tambahkan 0 sebagai filler
+        ];
+
         require(
-            verifier.verifyProof(root, nullifier, signal, proof),
+            verifier.verifyProof(
+                [proof[0], proof[1]], // _pA
+                [[proof[2], proof[3]], [proof[4], proof[5]]], // _pB
+                [proof[6], proof[7]], // _pC
+                pubSignals
+            ),
             "badproof"
         );
+
         p.nullifiers[nullifier] = true;
 
         uint256 weight = 1;
@@ -122,7 +144,7 @@ contract PrivacyVotingDAOv2 is Ownable {
             p.mode == CountingMode.Quadratic && address(govToken) != address(0)
         ) {
             uint256 raw = govToken.getVotes(msg.sender);
-            weight = sqrt(raw); // integer-floor sqrt
+            weight = sqrt(raw);
         }
         unchecked {
             p.tally[option] += weight;

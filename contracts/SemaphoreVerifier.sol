@@ -7,6 +7,6 @@ pragma solidity ^0.8.24;
 
 import "./Verifier_Groth16.sol"; // auto-generated – contains verifyProof()
 
-contract SemaphoreVerifier is Verifier_Groth16 {
+contract SemaphoreVerifier is Groth16Verifier {
     // Nothing to add – inherits the `verifyProof` signature required by DAO.
 }

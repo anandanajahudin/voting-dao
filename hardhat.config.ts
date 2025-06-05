@@ -8,10 +8,13 @@ const config: HardhatUserConfig = {
   settings: { optimizer: { enabled: true, runs: 10_000 } },
   },
   networks: {
-    optimism: {
-      url: process.env.RPC_OPTIMISM,
-      accounts: [process.env.DEPLOYER_PK!],
+    localhost: {
+      url: "http://127.0.0.1:8545"
     },
+    // optimism: {
+    //   url: process.env.RPC_OPTIMISM,
+    //   accounts: [process.env.DEPLOYER_PK!],
+    // },
   },
 };
 export default config;
