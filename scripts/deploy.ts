@@ -1,20 +1,21 @@
-import { ethers as hardhatEthers } from "hardhat";
+import { ethers } from "hardhat";
 import { AddressZero } from "@ethersproject/constants";
 
 async function main() {
-    const [deployer] = await hardhatEthers.getSigners();
+    const [deployer] = await ethers.getSigners();
     console.log("Deploying contracts with:", deployer.address);
 
-    const Verifier = await hardhatEthers.getContractFactory("SemaphoreVerifier");
+    const Verifier = await ethers.getContractFactory("SemaphoreVerifier");
     const verifier = await Verifier.deploy();
-    await verifier.deployed();
-    console.log("Verifier deployed at:", verifier.address);
+    await verifier.waitForDeployment(); // ⬅️ gunakan ini di ethers v6
+    console.log("Verifier deployed at:", await verifier.getAddress());
 
-    const merkleRoot = 1234567890n; // Ganti ini jika sudah punya root hasil dari frontend
-    const DAO = await hardhatEthers.getContractFactory("PrivacyVotingDAOv2");
-    const dao = await DAO.deploy(verifier.address, merkleRoot, AddressZero); // AddressZero kalau tidak pakai quadratic token
-    await dao.deployed();
-    console.log("DAO deployed at:", dao.address);
+    const merkleRoot = 1234567890n;
+
+    const DAO = await ethers.getContractFactory("PrivacyVotingDAOv2");
+    const dao = await DAO.deploy(await verifier.getAddress(), merkleRoot, AddressZero);
+    await dao.waitForDeployment(); // ⬅️ gunakan ini juga
+    console.log("DAO deployed at:", await dao.getAddress());
 }
 
 main().catch((error) => {

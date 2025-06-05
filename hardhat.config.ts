@@ -4,8 +4,8 @@ import "@nomicfoundation/hardhat-toolbox";
 
 const config: HardhatUserConfig = {
   solidity: {
-  version: "0.8.28",
-  settings: { optimizer: { enabled: true, runs: 10_000 } },
+    version: "0.8.28",
+    settings: { viaIR:true, optimizer: { enabled: true, runs: 10_000 } },
   },
   networks: {
     localhost: {
