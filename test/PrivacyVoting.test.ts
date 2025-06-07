@@ -3,103 +3,110 @@ import { ethers } from "hardhat";
 import { Identity } from "@semaphore-protocol/identity";
 import { Group } from "@semaphore-protocol/group";
 import { generateProof } from "@semaphore-protocol/proof";
+import * as dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 
+// Load env variables
+dotenv.config();
+
 describe("PrivacyVotingDAOv2", function () {
+  const wasmFilePath = path.resolve(process.env.VERIFIER_WASM_PATH || "./circuits/semaphore.wasm");
+  const zkeyFilePath = path.resolve(process.env.VERIFIER_ZKEY_PATH || "./circuits/semaphore.zkey");
+  const merkleTreeDepth = parseInt(process.env.MERKLE_TREE_DEPTH || "20");
+
   let dao: any;
   let verifier: any;
 
-  const wasmFilePath = path.resolve("./circuits/semaphore.wasm");
-  const zkeyFilePath = path.resolve("./circuits/semaphore.zkey");
-  const merkleTreeDepth = 20;
-
   const group = new Group();
-  const identity = new Identity();
 
-  beforeEach(async function () {
-    // Validasi file proof
-    if (!fs.existsSync(wasmFilePath)) {
-      throw new Error(`WASM not found at ${wasmFilePath}`);
-    }
-    if (!fs.existsSync(zkeyFilePath)) {
-      throw new Error(`ZKey not found at ${zkeyFilePath}`);
-    }
+  const identities: Identity[] = [];
+  const voters = 5;
+  const options = ["Yes", "No"];
+  const proposalTitle = "Test Anonymous Voting";
+  const proposalDesc = "Do you support this DAO?";
+  const countingMode = 0; // Simple mode
 
-    // Deploy Verifier
+  before(async function () {
+    if (!fs.existsSync(wasmFilePath)) throw new Error("WASM not found");
+    if (!fs.existsSync(zkeyFilePath)) throw new Error("ZKEY not found");
+
+    // Create voters and add to group
+    for (let i = 0; i < voters; i++) {
+      const id = new Identity();
+      identities.push(id);
+      group.addMember(id.commitment);
+    }
+    console.log("✅ Group Merkle Root:", group.root.toString());
+
+    // Deploy Verifier contract
     const VerifierFactory = await ethers.getContractFactory("SemaphoreVerifier");
     verifier = await VerifierFactory.deploy();
     await verifier.waitForDeployment();
-    const verifierAddress = await verifier.getAddress();
+    const verifierAddr = await verifier.getAddress();
 
-    // Add member to group
-    group.addMember(identity.commitment);
-    console.log("✅ Group Merkle Root:", group.root.toString());
-
-    // Deploy DAO contract
+    // Deploy DAO with group root
     const DAOFactory = await ethers.getContractFactory("PrivacyVotingDAOv2");
-    dao = await DAOFactory.deploy(verifierAddress, BigInt(group.root), ethers.ZeroAddress);
+    dao = await DAOFactory.deploy(verifierAddr, group.root, ethers.ZeroAddress);
     await dao.waitForDeployment();
     console.log("✅ DAO deployed at:", await dao.getAddress());
   });
 
-  it("should allow anonymous vote on a proposal", async function () {
+  it("should allow multiple anonymous votes and tally them", async function () {
     const [owner] = await ethers.getSigners();
 
-    console.log("\n🔨 Creating proposal...");
-    const createTx = await dao.connect(owner).createProposal(
-      "Test Proposal",
-      "Should we use Semaphore?",
-      0,
-      ["Yes", "No"],
-      60
+    console.log("\n🔨 Creating a Yes/No proposal...");
+    const tx = await dao.connect(owner).createProposal(
+      proposalTitle,
+      proposalDesc,
+      countingMode,
+      options,
+      120 // seconds
     );
-    await createTx.wait();
-    console.log("✅ Proposal created successfully.");
+    await tx.wait();
 
     const proposalId = 1;
-    const voteOption = 0;
 
-    // Generate signal and proof
-    const signal = BigInt(
-      ethers.solidityPackedKeccak256(["string"], [`VOTE_${voteOption}`])
-    );
-    const externalNullifier = BigInt(proposalId);
+    for (let i = 0; i < voters; i++) {
+      const identity = identities[i];
+      const randomOption = Math.floor(Math.random() * options.length);
 
-    console.log("\n🧠 Generating zero-knowledge proof...");
-    const fullProof: any = await generateProof(
-      identity,
-      group,
-      externalNullifier,
-      signal,
-      merkleTreeDepth,
-      {
-        wasm: wasmFilePath,
-        zkey: zkeyFilePath,
-      }
-    );
-    console.log("✅ ZK Proof generated.");
+      const signal = BigInt(
+        ethers.solidityPackedKeccak256(["string"], [`VOTE_${randomOption}`])
+      );
 
-    const {
-      nullifier,
-      scope, // signalHash
-      merkleTreeRoot,
-      points // solidity-formatted proof
-    } = fullProof;
+      const externalNullifier = BigInt(proposalId);
 
-    console.log("\n🗳️ Voting anonymously...");
-    const voteTx = await dao.vote(proposalId, voteOption, scope, nullifier, merkleTreeRoot, points);
-    await voteTx.wait();
-    console.log("✅ Vote submitted successfully.");
+      const proof = await generateProof(
+        identity,
+        group,
+        externalNullifier,
+        signal,
+        merkleTreeDepth,
+        {
+          wasm: wasmFilePath,
+          zkey: zkeyFilePath,
+        }
+      );
 
-    // Query results
-    console.log("\n📊 Fetching proposal tally...");
-    const [yesCount, noCount] = await dao.tallies(proposalId, 0, 2);
-    console.log(`🧮 Tally result for Proposal #${proposalId}:`);
-    console.log(`   ✔️ Yes: ${yesCount.toString()}`);
-    console.log(`   ❌ No : ${noCount.toString()}`);
+      await dao.vote(
+        proposalId,
+        randomOption,
+        proof.scope, // signalHash
+        proof.nullifier,
+        proof.merkleTreeRoot,
+        proof.points // zk-SNARK proof
+      );
 
-    expect(yesCount).to.equal(BigInt(1));
-    expect(noCount).to.equal(BigInt(0));
+      console.log(`🗳️ Voter ${i + 1} voted for: ${options[randomOption]}`);
+    }
+
+    // Fetch tallies
+    const [yes, no] = await dao.tallies(proposalId, 0, 2);
+    console.log("\n📊 Voting results:");
+    console.log(`✔️ Yes: ${yes.toString()}`);
+    console.log(`❌ No : ${no.toString()}`);
+
+    expect(yes + no).to.equal(BigInt(voters));
   });
 });
