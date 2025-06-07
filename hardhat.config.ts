@@ -1,20 +1,18 @@
+import * as dotenv from "dotenv";
+dotenv.config();
+
 import { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-verify";
 import "@nomicfoundation/hardhat-toolbox";
 
 const config: HardhatUserConfig = {
-  solidity: {
-    version: "0.8.28",
-    settings: { viaIR:true, optimizer: { enabled: true, runs: 10_000 } },
-  },
+  defaultNetwork: "localhost",
   networks: {
     localhost: {
-      url: "http://127.0.0.1:8545"
-    },
-    // optimism: {
-    //   url: process.env.RPC_OPTIMISM,
-    //   accounts: [process.env.DEPLOYER_PK!],
-    // },
+      url: process.env.RPC_URL || "http://127.0.0.1:8545",
+      accounts: [process.env.PRIVATE_KEY || ""]
+    }
   },
+  solidity: "0.8.24"
 };
+
 export default config;

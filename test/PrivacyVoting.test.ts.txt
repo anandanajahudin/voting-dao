@@ -1,0 +1,137 @@
+import { expect } from "chai";
+import { ethers } from "hardhat";
+import { Identity } from "@semaphore-protocol/identity";
+import { Group } from "@semaphore-protocol/group";
+import { generateProof } from "@semaphore-protocol/proof";
+import path from "path"; // Untuk logging path absolut
+import fs from "fs"; // Untuk memeriksa keberadaan file
+
+describe("PrivacyVotingDAOv2", function () {
+  let dao: any;
+  let verifier: any;
+
+  // !! PASTIKAN PATH INI BENAR RELATIF DARI ROOT PROYEK !!
+  const wasmFilePathRelative = "./circuits/semaphore.wasm";
+  const zkeyFilePathRelative = "./circuits/semaphore.zkey";
+
+  // Dapatkan path absolut untuk logging dan pemeriksaan
+  const wasmFilePathAbsolute = path.resolve(wasmFilePathRelative);
+  const zkeyFilePathAbsolute = path.resolve(zkeyFilePathRelative);
+
+  // Kedalaman pohon Merkle. Harus konsisten dengan sirkuit yang dikompilasi.
+  const merkleTreeDepth = 20;
+
+  // Inisialisasi grup. Default depth untuk `new Group()` di @semaphore-protocol/group v3+ adalah 20.
+  const group = new Group();
+  const identity = new Identity();
+
+  beforeEach(async function () {
+    // Verifikasi keberadaan file sirkuit sebelum setiap tes
+    if (!fs.existsSync(wasmFilePathAbsolute)) {
+      throw new Error(
+        `File WASM tidak ditemukan di: ${wasmFilePathAbsolute}. Pastikan path sudah benar dan file ada.`
+      );
+    }
+    if (!fs.existsSync(zkeyFilePathAbsolute)) {
+      throw new Error(
+        `File ZKey tidak ditemukan di: ${zkeyFilePathAbsolute}. Pastikan path sudah benar dan file ada.`
+      );
+    }
+
+    const VerifierFactory = await ethers.getContractFactory(
+      "SemaphoreVerifier"
+    );
+    verifier = await VerifierFactory.deploy();
+    await verifier.waitForDeployment();
+    const verifierAddress = await verifier.getAddress();
+
+    // Tambahkan anggota ke grup.
+    // Jika grup diinisialisasi ulang di sini, pastikan ia kosong sebelum addMember
+    // atau gunakan instance `group` yang sama dari scope luar.
+    // Untuk konsistensi, kita gunakan instance `group` dari luar.
+    if (group.members.length === 0) {
+      // Hanya tambahkan jika belum ada (misalnya jika beforeEach dijalankan >1 kali untuk konteks berbeda)
+      group.addMember(identity.commitment);
+    }
+
+    const merkleRoot = group.root;
+    console.log(`Merkle Root untuk deploy DAO: ${merkleRoot.toString()}`);
+
+    const DAOFactory = await ethers.getContractFactory("PrivacyVotingDAOv2");
+    try {
+      dao = await DAOFactory.deploy(
+        verifierAddress,
+        BigInt(merkleRoot), // Kontrak Solidity mengharapkan uint256
+        ethers.ZeroAddress
+      );
+      await dao.waitForDeployment();
+    } catch (error) {
+      console.error("Error deploying DAO contract:", error);
+      throw error;
+    }
+  });
+
+  it("should allow anonymous vote on a proposal", async function () {
+    const [owner] = await ethers.getSigners();
+
+    const tx = await dao.connect(owner).createProposal(
+      "Test Proposal",
+      "Should we use Semaphore?",
+      0, // CountingMode.Simple
+      ["Yes", "No"],
+      60
+    );
+    await tx.wait();
+
+    const proposalId = 1;
+    const voteOption = 0; // Merepresentasikan "Yes"
+
+    // 1. Buat sinyal yang unik dan non-zero untuk pesan.
+    //    Kita gunakan hash dari opsi vote untuk memastikan keunikan.
+    const messageForProof = BigInt(
+      ethers.solidityPackedKeccak256(["string"], [`VOTE_${voteOption}`])
+    );
+
+    // 2. External nullifier untuk cakupan proposal.
+    const externalNullifierForProof = BigInt(proposalId);
+
+    console.log("Generating proof with:");
+    console.log(`  Message (Signal): ${messageForProof}`);
+    console.log(`  External Nullifier: ${externalNullifierForProof}`);
+
+    // 3. Generate the proof.
+    const fullProof: any = await generateProof(
+      identity,
+      group,
+      externalNullifierForProof,
+      messageForProof,
+      merkleTreeDepth,
+      {
+        wasm: wasmFilePathAbsolute,
+        zkey: zkeyFilePathAbsolute,
+      }
+    );
+
+    // Sekarang console.log ini seharusnya berjalan!
+    console.log(
+      "Struktur Objek fullProof:",
+      JSON.stringify(fullProof, null, 2)
+    );
+
+    // 4. Ekstrak data yang diperlukan dari hasil proof
+    const { nullifierHash, signal, proof } = fullProof;
+
+    await dao.vote(
+      proposalId,
+      voteOption,
+      signal, // Kirim signal HASH yang dihasilkan oleh proof, BUKAN message mentah
+      nullifierHash,
+      group.root,
+      proof // Kirim proof array
+    );
+
+    const result = await dao.tallies(proposalId, 0, 2);
+    expect(result[0]).to.equal(BigInt(1));
+    expect(result[1]).to.equal(BigInt(0));
+  });
+});

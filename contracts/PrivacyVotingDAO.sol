@@ -56,17 +56,26 @@ contract PrivacyVotingDAO is Ownable {
         string calldata title,
         string calldata description,
         ProposalType pType,
-        string[] calldata options
+        string[] calldata options  // This is string[] calldata
     ) external onlyOwner returns (uint256 id) {
         require(options.length >= 2, "need >=2 options");
-        if (pType == ProposalType.Binary)
+        if (pType == ProposalType.Binary) {
             require(options.length == 2, "binary=2");
+        }
         id = ++proposalCount;
         Proposal storage p = _proposals[id];
         p.title = title;
         p.description = description;
         p.pType = pType;
-        p.options = options;
+
+        // ** FIX APPLIED HERE **
+        // Instead of direct assignment: p.options = options;
+        // Copy elements one by one from calldata to storage
+        delete p.options; // Clear the storage array first if it might contain old data
+        for (uint i = 0; i < options.length; i++) {
+            p.options.push(options[i]);
+        }
+
         p.open = true;
         p.created = uint64(block.timestamp);
         emit ProposalCreated(id, pType, title);
@@ -78,12 +87,14 @@ contract PrivacyVotingDAO is Ownable {
         p.open = false;
         uint8 winner = type(uint8).max;
         uint256 high = 0;
-        for (uint8 i; i < p.options.length; ++i) {
+        for (uint8 i = 0; i < p.options.length; ++i) { 
             uint256 votes = p.tally[i];
             if (votes > high) {
                 high = votes;
                 winner = i;
-            } else if (votes == high) winner = type(uint8).max; // tie
+            } else if (votes == high) {
+                winner = type(uint8).max; // tie
+            }
         }
         emit ProposalClosed(id, winner);
     }
@@ -125,7 +136,7 @@ contract PrivacyVotingDAO is Ownable {
             string memory title,
             ProposalType pType,
             bool open,
-            string[] memory options
+            string[] memory options // This will be a copy in memory
         )
     {
         Proposal storage p = _proposals[id];
@@ -140,8 +151,10 @@ contract PrivacyVotingDAO is Ownable {
         Proposal storage p = _proposals[id];
         uint16 len = uint16(p.options.length);
         require(start < len, "oob");
-        uint16 end = n == 0 || start + n > len ? len : start + n;
+        uint16 end = (n == 0 || start + n > len) ? len : start + n; 
         out = new uint256[](end - start);
-        for (uint16 i = start; i < end; ++i) out[i - start] = p.tally[i];
+        for (uint16 i = start; i < end; ++i) {
+            out[i - start] = p.tally[i];
+        }
     }
 }

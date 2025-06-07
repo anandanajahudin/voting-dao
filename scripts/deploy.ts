@@ -1,24 +1,34 @@
 import { ethers } from "hardhat";
-import { AddressZero } from "@ethersproject/constants";
+import * as dotenv from "dotenv";
+dotenv.config();
 
 async function main() {
-    const [deployer] = await ethers.getSigners();
-    console.log("Deploying contracts with:", deployer.address);
+  const [deployer] = await ethers.getSigners();
 
-    const Verifier = await ethers.getContractFactory("SemaphoreVerifier");
-    const verifier = await Verifier.deploy();
-    await verifier.waitForDeployment(); // ⬅️ gunakan ini di ethers v6
-    console.log("Verifier deployed at:", await verifier.getAddress());
+  console.log("Deploying contracts with account:", deployer.address);
 
-    const merkleRoot = 1234567890n;
+  // Deploy verifier contract
+  const Verifier = await ethers.getContractFactory("SemaphoreVerifier");
+  const verifier = await Verifier.deploy();
+  await verifier.waitForDeployment();
+  console.log("SemaphoreVerifier deployed to:", await verifier.getAddress());
 
-    const DAO = await ethers.getContractFactory("PrivacyVotingDAOv2");
-    const dao = await DAO.deploy(await verifier.getAddress(), merkleRoot, AddressZero);
-    await dao.waitForDeployment(); // ⬅️ gunakan ini juga
-    console.log("DAO deployed at:", await dao.getAddress());
+  // Dummy root for initialization (replace with actual Merkle root if needed)
+  const dummyMerkleRoot = BigInt(0);
+  const zeroAddress = ethers.ZeroAddress;
+
+  // Deploy DAO contract
+  const DAO = await ethers.getContractFactory("PrivacyVotingDAOv2");
+  const dao = await DAO.deploy(
+    await verifier.getAddress(),
+    dummyMerkleRoot,
+    zeroAddress
+  );
+  await dao.waitForDeployment();
+  console.log("PrivacyVotingDAOv2 deployed to:", await dao.getAddress());
 }
 
 main().catch((error) => {
-    console.error(error);
-    process.exit(1);
+  console.error(error);
+  process.exitCode = 1;
 });

@@ -1,0 +1,3 @@
+circom semaphore.circom --r1cs --wasm --sym -o build
+snarkjs groth16 setup build/semaphore.r1cs pot14_final.ptau build/semaphore_0000.zkey
+snarkjs zkey contribute build/semaphore_0000.zkey build/semaphore_final.zkey --name="Final Contributor" -v

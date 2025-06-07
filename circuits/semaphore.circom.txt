@@ -1,0 +1,58 @@
+pragma circom 2.1.5;
+
+include "binary-merkle-root.circom";
+include "poseidon.circom";
+include "babyjub.circom";
+include "comparators.circom";
+
+// The Semaphore V4 circuit.
+template Semaphore(merkleTreeDepth) {
+    // Input signals.
+    signal input secret;
+    signal input merkleProofSiblings[merkleTreeDepth];
+    signal input merkleProofIndices;
+    signal input scope;
+    signal input signalHashIn;
+
+    // Output signals.
+    signal output merkleTreeRoot;
+    signal output nullifier;
+    signal output signalHash;
+
+    // Checks if the secret is valid.
+    var l = 2736030358979909402780800718157159386076813972158567259200215660948447373041;
+    component isSecretValid = LessThan(251);
+    isSecretValid.in[0] <== secret;
+    isSecretValid.in[1] <== l;
+    isSecretValid.out === 1;
+
+    // Generates the identity commitment.
+    component secretHasher = Poseidon(1);
+    secretHasher.inputs[0] <== secret;
+
+    component identityCommitmentHasher = Poseidon(1);
+    identityCommitmentHasher.inputs[0] <== secretHasher.out;
+    var identityCommitment = identityCommitmentHasher.out;
+
+    // Generates the nullifier.
+    component nullifierHasher = Poseidon(2);
+    nullifierHasher.inputs[0] <== scope;
+    nullifierHasher.inputs[1] <== secretHasher.out;
+    nullifier <== nullifierHasher.out;
+
+    // Generates the signal hash.
+    component signalHasher = Poseidon(2);
+    signalHasher.inputs[0] <== scope;
+    signalHasher.inputs[1] <== signalHashIn;
+    signalHash <== signalHasher.out;
+
+    // Verifies the Merkle proof.
+    component merkleProof = BinaryMerkleRoot(merkleTreeDepth);
+    merkleProof.leaf <== identityCommitment;
+    merkleProof.indices <== merkleProofIndices;
+    for (var i = 0; i < merkleTreeDepth; i++) {
+        merkleProof.siblings[i] <== merkleProofSiblings[i];
+    }
+    merkleTreeRoot <== merkleProof.root;
+}
+component main = Semaphore(20);

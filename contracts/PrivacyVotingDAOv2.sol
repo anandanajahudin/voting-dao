@@ -4,12 +4,6 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./SemaphoreVerifier.sol"; // Assuming SemaphoreVerifier.sol is in the same directory or correctly pathed
 
-/**
- * @dev New features compared with v1:
- * • Automatic proposal expiry (Roadmap A)
- * • Optional quadratic tally (RoadmapE) – toggled per-proposal
- * • Emits PaginatedTallies event for cheap off-chain syncing
- */
 interface IERC20Votes {
     function getVotes(address account) external view returns (uint256);
 }
@@ -23,11 +17,11 @@ contract PrivacyVotingDAOv2 is Ownable {
     /* ---------- Constructor ---------- */
     constructor(
         SemaphoreVerifier _verifier,
-        uint64 _root,
+        uint256 _root, // <--- UBAH KE uint256
         IERC20Votes _govToken
     ) Ownable(msg.sender) {
         verifier = _verifier;
-        memberMerkleRoot = _root;
+        memberMerkleRoot = _root; // Pastikan tipe memberMerkleRoot juga uint256
         govToken = _govToken;
     }
 
@@ -43,13 +37,13 @@ contract PrivacyVotingDAOv2 is Ownable {
         bool closed;
     }
     /* ---------- Storage ---------- */
-    uint64 public memberMerkleRoot;
+    uint256 public memberMerkleRoot; // <--- UBAH KE uint256
     uint256 public proposalCount;
     mapping(uint256 => Proposal) private _proposals;
     SemaphoreVerifier public immutable verifier;
     IERC20Votes public immutable govToken; // optional ERC20Votes used for quadratic weight
     /* ---------- Events ---------- */
-    event MemberRootUpdated(uint64 newRoot);
+    event MemberRootUpdated(uint256 newRoot); // <--- UBAH KE uint256 (jika perlu konsisten)
     event ProposalCreated(
         uint256 indexed id,
         CountingMode mode,
@@ -65,7 +59,8 @@ contract PrivacyVotingDAOv2 is Ownable {
     event ProposalClosed(uint256 indexed id, uint8 winner);
 
     /* ---------- Owner-only ---------- */
-    function updateMemberRoot(uint64 newRoot) external onlyOwner {
+    function updateMemberRoot(uint256 newRoot) external onlyOwner {
+        // <--- UBAH KE uint256
         memberMerkleRoot = newRoot;
         emit MemberRootUpdated(newRoot);
     }
@@ -84,10 +79,9 @@ contract PrivacyVotingDAOv2 is Ownable {
         p.description = description;
         p.mode = mode;
 
-        // This section correctly copies the string array from calldata to storage
-        delete p.options; // Clear existing options array
+        delete p.options;
         for (uint i = 0; i < options.length; i++) {
-            p.options.push(options[i]); // Copy each string manually
+            p.options.push(options[i]);
         }
 
         p.closes = uint64(block.timestamp) + duration;
@@ -102,13 +96,12 @@ contract PrivacyVotingDAOv2 is Ownable {
         uint8 winner = type(uint8).max;
         uint256 high = 0;
         for (uint8 i = 0; i < p.options.length; ++i) {
-            // Added missing semicolon
             uint256 v = p.tally[i];
             if (v > high) {
                 high = v;
                 winner = i;
             } else if (v == high) {
-                winner = type(uint8).max; // tie
+                winner = type(uint8).max;
             }
         }
         emit ProposalClosed(id, winner);
@@ -118,49 +111,43 @@ contract PrivacyVotingDAOv2 is Ownable {
     function vote(
         uint256 id,
         uint8 option,
-        uint256 nullifier,
-        uint64 root,
+        uint256 signalHash, // <-- Terima signal hash dari klien
+        uint256 nullifierHash, // <-- Nama parameter yang jelas
+        uint256 merkleRoot, // <-- Nama parameter yang jelas
         uint256[8] calldata proof
     ) external {
         Proposal storage p = _proposals[id];
-        require(block.timestamp < p.closes, "closed");
-        require(option < p.options.length, "bad opt");
-        require(!p.nullifiers[nullifier], "dupe");
-        require(root == memberMerkleRoot, "root");
+        require(block.timestamp < p.closes, "voting is closed");
+        require(option < p.options.length, "invalid option");
+        require(!p.nullifiers[nullifierHash], "vote already cast");
+        require(merkleRoot == memberMerkleRoot, "invalid merkle root");
 
-        uint256 signal = uint256(keccak256(abi.encodePacked(id, option))) >> 8;
-
-        // Assuming your Verifier_Groth16.sol expects 4 public inputs:
-        // [root, nullifierHash, signalHash, externalNullifier]
-        // If your circuit has a different number/order of public inputs, adjust pubSignals accordingly.
-        // The original `PrivacyVotingDAOv2.txt` had `uint256(0)` as a filler.
-        // This depends entirely on your `Verifier_Groth16.sol` and the circuit it was generated from.
-        // For Semaphore, typical public inputs for proof verification might be:
-        // - merkleTreeRoot
-        // - nullifierHash
-        // - signalHash (often `abi.encodePacked(externalNullifier, signal)`)
-        // - externalNullifier (e.g., `appId` or `actionId` to prevent replay across applications/actions)
-        // The provided `Verifier_Groth16.sol` takes `uint[4] calldata _pubSignals`.
-        // Your current code uses: `[uint256(root), nullifier, signal, uint256(0)]`
-        // This assumes the fourth public input is 0 or not strictly validated as something else for this specific circuit.
-        uint256[4] memory pubSignals = [
-            uint256(root),
-            nullifier,
-            signal,
-            uint256(0) // This might need adjustment based on your circuit's specific externalNullifier usage
-        ];
-
+        // Periksa apakah signalHash yang diberikan cocok dengan opsi vote yang diklaim.
+        // Ini adalah cara on-chain untuk memvalidasi bahwa sinyal tersebut benar untuk vote ini.
+        bytes32 expectedSignalHash = keccak256(
+            abi.encodePacked("VOTE_", _toString(option))
+        );
         require(
-            verifier.verifyProof(
-                [proof[0], proof[1]], // _pA
-                [[proof[2], proof[3]], [proof[4], proof[5]]], // _pB
-                [proof[6], proof[7]], // _pC
-                pubSignals
-            ),
-            "badproof"
+            signalHash == uint256(expectedSignalHash),
+            "signal-option mismatch"
         );
 
-        p.nullifiers[nullifier] = true;
+        // Verifikasi bukti dengan Semaphore Verifier
+        // Di sini, kita asumsikan verifier Anda memiliki interface standar Groth16.
+        // Verifikasi bukti dengan Semaphore Verifier (Groth16)
+
+        // Susun sinyal publik sesuai urutan yang diharapkan oleh sirkuit Semaphore
+        // Urutan standar: root, nullifierHash, signalHash, externalNullifier
+        uint256[4] memory publicSignals = [
+            merkleRoot,
+            nullifierHash,
+            signalHash,
+            id // 'id' proposal berfungsi sebagai externalNullifier
+        ];
+
+        require(verifier.verifyProof(proof, publicSignals), "invalid proof");
+
+        p.nullifiers[nullifierHash] = true;
 
         uint256 weight = 1;
         if (
@@ -169,16 +156,14 @@ contract PrivacyVotingDAOv2 is Ownable {
             uint256 raw = govToken.getVotes(msg.sender);
             weight = sqrt(raw);
         }
+
         unchecked {
             p.tally[option] += weight;
         }
-        emit VoteCast(id, option, nullifier, weight);
 
-        // Consider if automatically closing is desired after every vote if time is up.
-        // This could lead to higher gas costs for the last voter.
-        // An alternative is to only allow manual closing via `closeProposal`.
+        emit VoteCast(id, option, nullifierHash, weight);
+
         if (block.timestamp >= p.closes && !p.closed) {
-            // Added !p.closed check to avoid redundant events/logic
             closeProposal(id);
         }
     }
@@ -201,7 +186,7 @@ contract PrivacyVotingDAOv2 is Ownable {
         return (
             p.title,
             p.mode,
-            !p.closed && block.timestamp < p.closes, // Logic for 'open'
+            !p.closed && block.timestamp < p.closes,
             p.closes,
             p.options
         );
@@ -217,9 +202,8 @@ contract PrivacyVotingDAOv2 is Ownable {
         require(start < len, "oob");
         uint16 end = (n == 0 || start + n > len || start + n < start)
             ? len
-            : start + n; // Added overflow check for start + n
+            : start + n;
         if (start >= end && len > 0) {
-            // Handle cases where start might be >= end due to large n or start being near len
             out = new uint256[](0);
             return out;
         }
@@ -230,7 +214,6 @@ contract PrivacyVotingDAOv2 is Ownable {
     }
 
     /* ---------- Internal ---------- */
-    // Basic integer square root
     function sqrt(uint256 x) private pure returns (uint256 y) {
         if (x == 0) return 0;
         uint256 z = (x + 1) / 2;
@@ -239,5 +222,23 @@ contract PrivacyVotingDAOv2 is Ownable {
             y = z;
             z = (x / z + z) / 2;
         }
+    }
+    function _toString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) {
+            return "0";
+        }
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
     }
 }
