@@ -92,7 +92,8 @@ describe("PrivacyVotingDAOv2", function () {
         }
       );
 
-      await dao.vote(
+      // Kirim vote dan tunggu receipt-nya
+      const tx = await dao.vote(
         proposalId,
         randomOption,
         proof.scope, // signalHash
@@ -100,6 +101,16 @@ describe("PrivacyVotingDAOv2", function () {
         proof.merkleTreeRoot,
         proof.points
       );
+      const receipt = await tx.wait();
+
+      // Cari event ProofVerified di receipt
+      for (const event of receipt.events ?? []) {
+        if (event.event === "ProofVerified") {
+          console.log(
+            `🛡️ ProofVerified Event - Proposal: ${event.args.proposalId.toString()}, MerkleRoot: ${event.args.merkleRoot.toString()}, Nullifier: ${event.args.nullifierHash.toString()}, SignalHash: ${event.args.signalHash.toString()}`
+          );
+        }
+      }
 
       console.log(`🗳️ Voter ${i + 1} voted for: ${options[randomOption]}`);
     }
