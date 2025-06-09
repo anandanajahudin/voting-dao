@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "./SemaphoreVerifier.sol"; // Assuming SemaphoreVerifier.sol is in the same directory or correctly pathed
+import "./SemaphoreVerifier.sol";
 
 interface IERC20Votes {
     function getVotes(address account) external view returns (uint256);
@@ -17,11 +17,11 @@ contract PrivacyVotingDAOv2 is Ownable {
     /* ---------- Constructor ---------- */
     constructor(
         SemaphoreVerifier _verifier,
-        uint256 _root, // <--- UBAH KE uint256
+        uint256 _root,
         IERC20Votes _govToken
     ) Ownable(msg.sender) {
         verifier = _verifier;
-        memberMerkleRoot = _root; // Pastikan tipe memberMerkleRoot juga uint256
+        memberMerkleRoot = _root;
         govToken = _govToken;
     }
 
@@ -29,38 +29,45 @@ contract PrivacyVotingDAOv2 is Ownable {
     struct Proposal {
         string title;
         string description;
-        CountingMode mode; // simple (1 per identity) or quadratic
+        CountingMode mode;
         string[] options;
-        mapping(uint256 => uint256) tally; // option => votes
-        mapping(uint256 => bool) nullifiers; // seen nullifiers
-        uint64 closes; // unix time when voting ends
+        mapping(uint256 => uint256) tally;
+        mapping(uint256 => bool) nullifiers;
+        uint64 closes;
         bool closed;
     }
+
     /* ---------- Storage ---------- */
-    uint256 public memberMerkleRoot; // <--- UBAH KE uint256
+    uint256 public memberMerkleRoot;
     uint256 public proposalCount;
     mapping(uint256 => Proposal) private _proposals;
     SemaphoreVerifier public immutable verifier;
-    IERC20Votes public immutable govToken; // optional ERC20Votes used for quadratic weight
+    IERC20Votes public immutable govToken;
+
     /* ---------- Events ---------- */
-    event MemberRootUpdated(uint256 newRoot); // <--- UBAH KE uint256 (jika perlu konsisten)
+    event MemberRootUpdated(uint256 newRoot);
     event ProposalCreated(
         uint256 indexed id,
         CountingMode mode,
         string title,
         uint64 closes
     );
+    event ProofVerified(
+        uint256 indexed id,
+        uint256 merkleRoot,
+        uint256 nullifierHash,
+        uint256 signalHash
+    );
     event VoteCast(
         uint256 indexed id,
         uint8 option,
-        uint256 nullifier,
+        uint256 nullifierHash,
         uint256 weight
     );
     event ProposalClosed(uint256 indexed id, uint8 winner);
 
     /* ---------- Owner-only ---------- */
     function updateMemberRoot(uint256 newRoot) external onlyOwner {
-        // <--- UBAH KE uint256
         memberMerkleRoot = newRoot;
         emit MemberRootUpdated(newRoot);
     }
@@ -70,7 +77,7 @@ contract PrivacyVotingDAOv2 is Ownable {
         string calldata description,
         CountingMode mode,
         string[] calldata options,
-        uint32 duration /* seconds */
+        uint32 duration
     ) external onlyOwner returns (uint256 id) {
         require(options.length >= 2, "need 2+ opts");
         id = ++proposalCount;
@@ -111,9 +118,9 @@ contract PrivacyVotingDAOv2 is Ownable {
     function vote(
         uint256 id,
         uint8 option,
-        uint256 signalHash, // <-- Terima signal hash dari klien
-        uint256 nullifierHash, // <-- Nama parameter yang jelas
-        uint256 merkleRoot, // <-- Nama parameter yang jelas
+        uint256 signalHash,
+        uint256 nullifierHash,
+        uint256 merkleRoot,
         uint256[8] calldata proof
     ) external {
         Proposal storage p = _proposals[id];
@@ -122,8 +129,7 @@ contract PrivacyVotingDAOv2 is Ownable {
         require(!p.nullifiers[nullifierHash], "vote already cast");
         require(merkleRoot == memberMerkleRoot, "invalid merkle root");
 
-        // Periksa apakah signalHash yang diberikan cocok dengan opsi vote yang diklaim.
-        // Ini adalah cara on-chain untuk memvalidasi bahwa sinyal tersebut benar untuk vote ini.
+        // Validasi signalHash sesuai opsi voting
         bytes32 expectedSignalHash = keccak256(
             abi.encodePacked("VOTE_", _toString(option))
         );
@@ -132,32 +138,29 @@ contract PrivacyVotingDAOv2 is Ownable {
             "signal-option mismatch"
         );
 
-        // Verifikasi bukti dengan Semaphore Verifier
-        // Di sini, kita asumsikan verifier Anda memiliki interface standar Groth16.
-        // Verifikasi bukti dengan Semaphore Verifier (Groth16)
-
-        // Susun sinyal publik sesuai urutan yang diharapkan oleh sirkuit Semaphore
-        // Urutan standar: root, nullifierHash, signalHash, externalNullifier
+        // Verifikasi proof zk-SNARK dengan SemaphoreVerifier
         uint256[4] memory publicSignals = [
             merkleRoot,
             nullifierHash,
             signalHash,
-            id // 'id' proposal berfungsi sebagai externalNullifier
+            id // externalNullifier = proposal id
         ];
-        
-        require(
-            verifier.verifyProof(proof, publicSignals),
-            "invalid proof"
-        );
 
+        bool ok = verifier.verifyProof(proof, publicSignals);
+        require(ok, "invalid proof");
+
+        // Emit event ProofVerified setelah proof valid
+        emit ProofVerified(id, merkleRoot, nullifierHash, signalHash);
+
+        // Catat nullifier supaya voting tidak bisa diulang
         p.nullifiers[nullifierHash] = true;
 
         uint256 weight = 1;
         if (
             p.mode == CountingMode.Quadratic && address(govToken) != address(0)
         ) {
-            uint256 raw = govToken.getVotes(msg.sender);
-            weight = sqrt(raw);
+            uint256 rawVotes = govToken.getVotes(msg.sender);
+            weight = sqrt(rawVotes);
         }
 
         unchecked {
@@ -207,7 +210,7 @@ contract PrivacyVotingDAOv2 is Ownable {
             ? len
             : start + n;
         if (start >= end && len > 0) {
-            out = new uint256[](0);
+            out = new uint256[](0); // <-- perbaikan di sini
             return out;
         }
         out = new uint256[](end - start);
@@ -226,22 +229,23 @@ contract PrivacyVotingDAOv2 is Ownable {
             z = (x / z + z) / 2;
         }
     }
+
     function _toString(uint256 value) internal pure returns (string memory) {
-    if (value == 0) {
-        return "0";
-    }
-    uint256 temp = value;
-    uint256 digits;
-    while (temp != 0) {
-        digits++;
-        temp /= 10;
-    }
-    bytes memory buffer = new bytes(digits);
-    while (value != 0) {
-        digits -= 1;
-        buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
-        value /= 10;
-    }
-    return string(buffer);
+        if (value == 0) {
+            return "0";
+        }
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
     }
 }
