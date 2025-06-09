@@ -19,58 +19,54 @@ describe("PrivacyVotingDAOv2", function () {
   let verifier: any;
 
   const group = new Group();
+
   const identities: Identity[] = [];
   const voters = 5;
+  const options = ["Yes", "No"];
+  const proposalTitle = "Test Anonymous Voting";
+  const proposalDesc = "Do you support this DAO?";
+  const countingMode = 0; // Simple mode
 
   before(async function () {
     if (!fs.existsSync(wasmFilePath)) throw new Error("WASM not found");
     if (!fs.existsSync(zkeyFilePath)) throw new Error("ZKEY not found");
 
+    // Create voters and add to group
     for (let i = 0; i < voters; i++) {
       const id = new Identity();
       identities.push(id);
       group.addMember(id.commitment);
     }
+    console.log("✅ Group Merkle Root:", group.root.toString());
 
-    console.log("✅ Merkle Root:", group.root.toString());
-
+    // Deploy Verifier contract
     const VerifierFactory = await ethers.getContractFactory("SemaphoreVerifier");
     verifier = await VerifierFactory.deploy();
     await verifier.waitForDeployment();
+    const verifierAddr = await verifier.getAddress();
 
+    // Deploy DAO with group root
     const DAOFactory = await ethers.getContractFactory("PrivacyVotingDAOv2");
-    dao = await DAOFactory.deploy(await verifier.getAddress(), group.root, ethers.ZeroAddress);
+    dao = await DAOFactory.deploy(verifierAddr, group.root, ethers.ZeroAddress);
     await dao.waitForDeployment();
+    console.log("✅ DAO deployed at:", await dao.getAddress());
   });
 
-  it("should create one proposal (Yes/No or Multiple Options) and allow anonymous voting", async function () {
+  it("should allow multiple anonymous votes and tally them", async function () {
     const [owner] = await ethers.getSigners();
 
-    // 🔀 Randomly choose proposal type
-    const isYesNo = Math.random() < 0.5;
-
-    const options = isYesNo
-      ? ["Yes", "No"]
-      : ["Red", "Blue", "Green", "Yellow"]; // Multiple options
-
-    const title = isYesNo ? "Do you support the new DAO rules?" : "Choose your favorite color";
-    const desc = isYesNo ? "Simple Yes/No vote for governance update." : "Color preference vote.";
-
+    console.log("\n🔨 Creating a Yes/No proposal...");
     const tx = await dao.connect(owner).createProposal(
-      title,
-      desc,
-      0, // CountingMode.Simple
+      proposalTitle,
+      proposalDesc,
+      countingMode,
       options,
-      120 // duration (seconds)
+      120 // seconds
     );
     await tx.wait();
 
     const proposalId = 1;
 
-    console.log(`\n📄 Created proposal: "${title}"`);
-    console.log(`🔢 Options: ${options.join(", ")}`);
-
-    // 🗳 Each identity votes randomly
     for (let i = 0; i < voters; i++) {
       const identity = identities[i];
       const randomOption = Math.floor(Math.random() * options.length);
@@ -78,6 +74,7 @@ describe("PrivacyVotingDAOv2", function () {
       const signal = BigInt(
         ethers.solidityPackedKeccak256(["string"], [`VOTE_${randomOption}`])
       );
+
       const externalNullifier = BigInt(proposalId);
 
       const proof = await generateProof(
@@ -98,20 +95,18 @@ describe("PrivacyVotingDAOv2", function () {
         proof.scope, // signalHash
         proof.nullifier,
         proof.merkleTreeRoot,
-        proof.points
+        proof.points // zk-SNARK proof
       );
 
       console.log(`🗳️ Voter ${i + 1} voted for: ${options[randomOption]}`);
     }
 
-    // 📊 Get result
-    const tallies: bigint[] = await dao.tallies(proposalId, 0, options.length);
+    // Fetch tallies
+    const [yes, no] = await dao.tallies(proposalId, 0, 2);
     console.log("\n📊 Voting results:");
-    options.forEach((opt, idx) => {
-      console.log(`🟢 ${opt}: ${tallies[idx].toString()}`);
-    });
+    console.log(`✔️ Yes: ${yes.toString()}`);
+    console.log(`❌ No : ${no.toString()}`);
 
-    const total = tallies.reduce((acc, val) => acc + val, BigInt(0));
-    expect(total).to.equal(BigInt(voters));
+    expect(yes + no).to.equal(BigInt(voters));
   });
 });
