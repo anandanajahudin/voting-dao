@@ -45,7 +45,7 @@ contract SemaphoreVerifier {
     /// @param publicSignals The public signals of the proof.
     /// @return True if the proof is valid, false otherwise.
     function verifyProof(
-        uint256[8] calldata proof,         // <-- Nama ditambahkan kembali
+        uint256[8] calldata proof, // <-- Nama ditambahkan kembali
         uint256[4] calldata publicSignals // <-- Nama ditambahkan kembali
     ) public pure returns (bool) {
         // Ini adalah mock verifier yang selalu mengembalikan true.
