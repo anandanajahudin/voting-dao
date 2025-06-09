@@ -1,0 +1,25 @@
+{
+    "name": "dao-voting-frontend",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "dev": "next dev",
+        "build": "next build",
+        "start": "next start"
+    },
+    "dependencies": {
+        "next": "latest",
+        "react": "latest",
+        "react-dom": "latest",
+        "ethers": "^5.7.2",
+        "@semaphore-protocol/identity": "^0.1.0",
+        "@semaphore-protocol/group": "^0.1.0",
+        "@semaphore-protocol/proof": "^0.1.0",
+        "axios": "^1.2.0"
+    },
+    "devDependencies": {
+        "typescript": "^4.5.2",
+        "@types/node": "^16.11.6",
+        "@types/react": "^17.0.34"
+    }
+}
