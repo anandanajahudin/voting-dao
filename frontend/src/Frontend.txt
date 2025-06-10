@@ -1,0 +1,292 @@
+Full-stack scaffold using Next.js/React on the front-end and a simple Express+Lowdb server on back-end
+
+
+1. `frontend/package.json`
+{
+  "name": "dao-voting-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "ethers": "^5.7.2",
+    "@semaphore-protocol/identity": "^0.1.0",
+    "@semaphore-protocol/group": "^0.1.0",
+    "@semaphore-protocol/proof": "^0.1.0",
+    "axios": "^1.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^4.5.2",
+    "@types/node": "^16.11.6",
+    "@types/react": "^17.0.34"
+  }
+}
+```
+
+2. `frontend/.env.local`
+
+NEXT_PUBLIC_RPC_URL=http://localhost:8545
+NEXT_PUBLIC_CONTRACT_ADDRESS=<YourVotingContractAddress>
+NEXT_PUBLIC_VERIFIER_ADDRESS=<YourVerifierAddress>
+NEXT_PUBLIC_API_URL=http://localhost:4000
+
+
+3. `frontend/lib/semaphore.ts`
+
+import { Identity } from '@semaphore-protocol/identity';
+import { Group } from '@semaphore-protocol/group';
+import { generateProof, packToSolidityProof } from '@semaphore-protocol/proof';
+import path from 'path';
+
+export async function createGroupAndIdentities(depth = 20, count = 2) {
+  const group = new Group(depth);
+  const identities = [];
+  for (let i = 0; i < count; i++) {
+    const id = new Identity();
+    identities.push(id);
+    group.addMember(id.commitment);
+  }
+  return { group, identities };
+}
+
+export async function makeVoteProof(
+  identity: Identity,
+  group: Group,
+  proposalId: number,
+  choice: number
+) {
+  const signal = ethers.utils.formatBytes32String(choice.toString());
+  const externalNullifier = proposalId;
+  const fullProof = await generateProof(identity, group, externalNullifier, signal, {
+    wasmFilePath: path.join(process.cwd(), 'circuits/semaphore.wasm'),
+    zkeyFilePath: path.join(process.cwd(), 'circuits/semaphore.zkey')
+  });
+  const solidityProof = packToSolidityProof(fullProof.proof);
+  return { publicSignals: fullProof.publicSignals, solidityProof };
+}
+
+
+4. `frontend/pages/_app.tsx`
+
+import '../styles/globals.css';
+import type { AppProps } from 'next/app';
+
+export default function MyApp({ Component, pageProps }: AppProps) {
+  return <Component {...pageProps} />;
+}
+
+
+5. `frontend/pages/index.tsx` (Dashboard)
+
+import Link from 'next/link';
+import axios from 'axios';
+import { useEffect, useState } from 'react';
+
+type Proposal = { id: number; title: string; multi: boolean; options: string[]; }
+
+export default function Dashboard() {
+  const [list, setList] = useState<Proposal[]>([]);
+  useEffect(() => {
+    axios.get(`${process.env.NEXT_PUBLIC_API_URL}/proposals`).then(r => setList(r.data));
+  }, []);
+  return (
+    <div className="p-4">
+      <h1 className="text-xl font-bold">DAO Voting Dashboard</h1>
+      <Link href="/create"><a className="text-blue-500">+ Create Proposal</a></Link>
+      <ul className="mt-4">
+        {list.map(p => (
+          <li key={p.id} className="my-2">
+            <Link href={`/vote/${p.id}`}>{p.title}</Link>
+            {' | '}
+            <Link href={`/results/${p.id}`}>Results</Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+
+6. `frontend/pages/create.tsx` (Create Proposal)
+
+import { useState } from 'react';
+import axios from 'axios';
+import { useRouter } from 'next/router';
+
+export default function Create() {
+  const [title, setTitle] = useState('');
+  const [multi, setMulti] = useState(false);
+  const [opts, setOpts] = useState(['', '']);
+  const router = useRouter();
+
+  const submit = async () => {
+    const options = opts.filter(o => o.trim());
+    await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/proposals`, { title, multi, options });
+    router.push('/');
+  };
+
+  return (
+    <div className="p-4">
+      <h1>Create Proposal</h1>
+      <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Title" />
+      <label>
+        <input type="checkbox" checked={multi} onChange={e=>setMulti(e.target.checked)} /> Multi-choice
+      </label>
+      {opts.map((v,i) => (
+        <input key={i} value={v} onChange={e=>{
+          const a=[...opts]; a[i]=e.target.value; setOpts(a);
+        }} placeholder={`Option ${i+1}`} />
+      ))}
+      <button onClick={()=>setOpts([...opts, ''])}>+ Option</button>
+      <button onClick={submit}>Submit</button>
+    </div>
+  );
+}
+
+
+7. `frontend/pages/vote/[id].tsx` (Cast Vote)
+
+import { useRouter } from 'next/router';
+import { useEffect, useState } from 'react';
+import axios from 'axios';
+import { ethers } from 'ethers';
+import VotingABI from '../../abis/PrivacyVotingDAOv2.json';
+import { createGroupAndIdentities, makeVoteProof } from '../../lib/semaphore';
+
+export default function VotePage() {
+  const { query } = useRouter();
+  const id = Number(query.id);
+  const [p, setP] = useState<any>(null);
+  useEffect(()=>{
+    axios.get(`${process.env.NEXT_PUBLIC_API_URL}/proposals/${id}`).then(r=>setP(r.data));
+  },[id]);
+
+  const cast = async (choice: number) => {
+    const provider = new ethers.providers.JsonRpcProvider(process.env.NEXT_PUBLIC_RPC_URL);
+    const signer = provider.getSigner();
+    const contract = new ethers.Contract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS!, VotingABI, signer);
+    const { group, identities } = await createGroupAndIdentities();
+    const { publicSignals, solidityProof } = await makeVoteProof(identities[0], group, id, choice);
+    await contract.vote(id, choice, publicSignals[2], publicSignals[1], publicSignals[0], solidityProof);
+    alert('Vote submitted!');
+  };
+
+  if (!p) return <div>Loading…</div>;
+  return (
+    <div className="p-4">
+      <h1>{p.title}</h1>
+      {p.options.map((opt: string, i: number) => (
+        <button key={i} onClick={()=>cast(i)} className="m-2">{opt}</button>
+      ))}
+    </div>
+  );
+}
+
+
+8. `frontend/pages/results/[id].tsx` (Show Tallies)
+
+import { useRouter } from 'next/router';
+import { useEffect, useState } from 'react';
+import axios from 'axios';
+import { ethers } from 'ethers';
+import VotingABI from '../../abis/PrivacyVotingDAOv2.json';
+
+export default function ResultsPage() {
+  const { query } = useRouter();
+  const id = Number(query.id);
+  const [tallies, setTallies] = useState<number[]>([]);
+
+  useEffect(()=>{
+    (async ()=>{
+      const provider = new ethers.providers.JsonRpcProvider(process.env.NEXT_PUBLIC_RPC_URL);
+      const contract = new ethers.Contract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS!, VotingABI, provider);
+      const res = await contract.getTallies(id);
+      setTallies(res.map((b: any)=>b.toNumber()));
+    })();
+  },[id]);
+
+  return (
+    <div className="p-4">
+      <h1>Results for Proposal {id}</h1>
+      <ul>
+        {tallies.map((t,i)=><li key={i}>Option {i}: {t}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+
+9. `server/package.json`
+
+{
+  "name": "dao-voting-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "dependencies": {
+    "express": "^4.18.2",
+    "lowdb": "^1.0.0",
+    "nanoid": "^4.0.0",
+    "cors": "^2.8.5",
+    "body-parser": "^1.19.1"
+  }
+}
+
+
+10. `server/index.js`
+
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const { nanoid } = require('nanoid');
+const low = require('lowdb');
+const FileSync = require('lowdb/adapters/FileSync');
+
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+
+const adapter = new FileSync('db.json');
+const db = low(adapter);
+// defaults
+db.defaults({ proposals: [] }).write();
+
+// Create proposal
+app.post('/proposals', (req, res) => {
+  const { title, multi, options } = req.body;
+  const id = db.get('proposals').size().value() + 1;
+  db.get('proposals')
+    .push({ id, title, multi, options })
+    .write();
+  res.json({ id, title, multi, options });
+});
+
+// List
+app.get('/proposals', (req, res) => {
+  res.json(db.get('proposals').value());
+});
+
+// Detail
+app.get('/proposals/:id', (req, res) => {
+  const p = db.get('proposals').find({ id: Number(req.params.id) }).value();
+  res.json(p);
+});
+
+app.listen(4000, () => console.log('API listening on http://localhost:4000'));  
+
+
+
+
+Usage
+1. Start server  
+   cd server && npm install && npm start
+2. Launch dApp  
+   cd frontend && npm install && npm run dev
+3. Deploy contracts and set addresses in `.env.local`.
+4. Run simulate script to populate on-chain + circuits.
