@@ -16,15 +16,13 @@ interface VoteProps {
     proof: bigint[]
   ) => Promise<void>
   memberMerkleRoot: bigint
-  members: string[]
 }
 
 const Vote: React.FC<VoteProps> = ({
   proposalId,
   options,
   onVote,
-  memberMerkleRoot,
-  members
+  memberMerkleRoot
 }) => {
   const [selectedOption, setSelectedOption] = useState<number>(0)
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
@@ -41,8 +39,7 @@ const Vote: React.FC<VoteProps> = ({
 
       const identity = new Identity(identityData)
       const group = new Group()
-      group.addMembers(members.map(BigInt))
-      // group.addMember(identity.commitment)
+      group.addMember(identity.commitment)
 
       const signal = `VOTE_${options[selectedOption]}`
       const externalNullifier = proposalId

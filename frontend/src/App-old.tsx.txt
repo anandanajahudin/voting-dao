@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { ethers } from "ethers";
 import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
 
@@ -24,7 +24,6 @@ export default function App() {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [dao, setDao] = useState<ethers.Contract | null>(null);
   const [memberMerkleRoot, setMemberMerkleRoot] = useState<bigint | null>(null);
-  const [members, setMembers] = useState<string[]>([]);
 
   const fetchProposals = async (contract: ethers.Contract) => {
     try {
@@ -44,15 +43,6 @@ export default function App() {
       setProposals(list);
     } catch (error) {
       console.error("Failed to fetch proposals:", error);
-    }
-  };
-
-  const fetchMembers = async (contract: ethers.Contract) => {
-    try {
-      const memberList: bigint[] = await contract.getMembers();
-      setMembers(memberList.map((m: bigint) => m.toString()));
-    } catch (error) {
-      console.error("Failed to fetch members:", error);
     }
   };
 
@@ -105,11 +95,10 @@ export default function App() {
         </nav>
 
         <MerkleRootStatus
-          onLoaded={async (root, contract) => {
+          onLoaded={(root, contract) => {
             setMemberMerkleRoot(root);
             setDao(contract);
-            await fetchProposals(contract);
-            await fetchMembers(contract);
+            fetchProposals(contract);
           }}
         />
 
@@ -153,7 +142,6 @@ export default function App() {
                         options={proposal.options}
                         onVote={handleVote}
                         memberMerkleRoot={memberMerkleRoot}
-                        members={members}
                       />
                     )}
                   </div>
